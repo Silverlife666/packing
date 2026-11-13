@@ -80,6 +80,7 @@ td button{padding:5px 9px;font-size:.75rem}
 <p class="hint">Import łączy plik z archiwum w przeglądarce: nowe numery są dodawane, a istniejące zastępowane tylko wtedy, gdy wersja z pliku jest nowsza (data zapisu). Nic nie jest kasowane.</p></div>
 <div class="panel"><h3>☁ Supabase – kopia archiwum w chmurze</h3>
 <div class="row" style="align-items:flex-start"><div style="flex:2;min-width:240px"><label>Adres projektu (URL)</label><input id="sbUrl" placeholder="https://xxxx.supabase.co" onchange="sbSaveCfg()"></div><div style="flex:3;min-width:240px"><label>Klucz anon (public)</label><input id="sbKey" type="password" autocomplete="off" onchange="sbSaveCfg()"></div><div style="flex:1;min-width:180px"><label>Tabela</label><input id="sbTable" placeholder="packing_list_archive" onchange="sbSaveCfg()"></div></div>
+<label style="text-transform:none;letter-spacing:0;font-size:.9rem;display:flex;align-items:center;gap:8px;margin:4px 0 10px"><input type="checkbox" id="sbAuto" checked style="width:auto;margin:0" onchange="sbSaveCfg()">Automatyczna synchronizacja: archiwum, bieżący dokument i słownik (wspólne dla wszystkich urządzeń z tym samym projektem)</label>
 <div class="row"><button onclick="sbTest()">🔌 Test połączenia</button><button class="ok" onclick="sbPush()">☁ Wyślij archiwum do Supabase</button><button class="ok" onclick="sbPull()">⬇ Pobierz z Supabase</button><button onclick="sbShowSql()">📋 Kopiuj SQL tabeli</button></div>
 <p class="hint" id="sbMsg">Wysyłane są tylko dokumenty nowsze niż w chmurze, pobierane tylko nowsze niż lokalne. Status i akcje na pojedynczych dokumentach (w tym usuwanie z chmury) są w tabeli archiwum. Po zmianie SQL (polityka DELETE) uruchom go ponownie w Supabase. Konfiguracja zapisuje się w tej przeglądarce.</p></div></section>
 <div class="panel" style="margin-top:18px"><div class="grid" id="sum"></div><div id="warns" style="margin-top:12px"></div>
@@ -161,11 +162,13 @@ function odsBlob(sheets){const ws=new Set();sheets.forEach(s=>s.widths.forEach(w
 function saveBlob(blob,name){const a=document.createElement('a'),u=URL.createObjectURL(blob);a.href=u;a.download=name;document.body.appendChild(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(u),4000)}
 </script>
 <script>
-const APP_VERSION="1.8.0",KEY="pl_doc_v1",ARK="pl_archive_v1",SB_KEY="pl_sb_cfg_v1";
+const APP_VERSION="1.9.0",KEY="pl_doc_v1",ARK="pl_archive_v1",SB_KEY="pl_sb_cfg_v1";
 const r2=v=>Math.round(v*100)/100;
 // Typy palet: domyślne wymiary [cm] i tara [kg] – orientacyjne, można nadpisać na każdej palecie
 const PT={"EUR":{l:120,w:80,t:25},"Półpaleta":{l:80,w:60,t:12},"Przemysłowa":{l:120,w:100,t:30},"Inna":{l:"",w:"",t:""}};
 let ARF={q:"",st:"",from:"",to:"",cl:""},CL=null;
+let SYNC={st:"off",at:null,msg:"",busy:false,again:false,applying:false,timer:null};
+const SYNC_KEYS={"pl_doc_v1":"doc","pl_dict_v1":"dict"};
 // Mapowanie importu: jednostki rozpoznawane w wierszu pozycji (zmień pod układ faktury/zamówienia)
 const UNITS="szt|kg|m|mb|opak|op|kpl|kar|pal|l|rolka|rol|para";
 const ROW=new RegExp("^(\\d{1,3})\\.?\\s+(.+?)\\s+(\\d[\\d ]*(?:[,.]\\d{1,3})?)\\s+("+UNITS+")\\.?(?=\\s|$)","i");
@@ -174,8 +177,8 @@ const esc=s=>String(s??"").replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&g
 const p2=n=>String(n).padStart(2,"0");
 const today=()=>{const d=new Date();return d.getFullYear()+"-"+p2(d.getMonth()+1)+"-"+p2(d.getDate())};
 const STOR_OK="Zapis: lokalny w przeglądarce";
-function storState(ok,msg){const e=document.getElementById("stor");if(!e)return;e.textContent=ok?STOR_OK:"⚠ BŁĄD ZAPISU";e.style.background=ok?"":"#ae3d3d";e.title=ok?"":(msg||"")}
-const LS={bad:false,get(k,d){try{const v=localStorage.getItem(k);return v?JSON.parse(v):d}catch(e){return d}},set(k,v){try{localStorage.setItem(k,JSON.stringify(v));if(LS.bad){LS.bad=false;storState(true)}return true}catch(e){const first=!LS.bad;LS.bad=true;storState(false,e.message);const m=document.getElementById("msg");if(m)m.textContent="⚠ Nie udało się zapisać w przeglądarce ("+e.message+"). Zmiany mogą zostać utracone — wyeksportuj dokument (XLSX/CSV).";if(first)alert("Nie udało się zapisać danych w przeglądarce ("+e.message+").\nWyeksportuj dokument (XLSX/CSV), aby nie stracić zmian.");return false}}};
+function storState(ok,msg){const e=document.getElementById("stor");if(!e)return;if(ok){syncBadge();return}e.textContent="⚠ BŁĄD ZAPISU";e.style.background="#ae3d3d";e.title=msg||""}
+const LS={bad:false,get(k,d){try{const v=localStorage.getItem(k);return v?JSON.parse(v):d}catch(e){return d}},set(k,v){try{localStorage.setItem(k,JSON.stringify(v));if(LS.bad){LS.bad=false;storState(true)}if(SYNC_KEYS[k])syncDirty(SYNC_KEYS[k]);return true}catch(e){const first=!LS.bad;LS.bad=true;storState(false,e.message);const m=document.getElementById("msg");if(m)m.textContent="⚠ Nie udało się zapisać w przeglądarce ("+e.message+"). Zmiany mogą zostać utracone — wyeksportuj dokument (XLSX/CSV).";if(first)alert("Nie udało się zapisać danych w przeglądarce ("+e.message+").\nWyeksportuj dokument (XLSX/CSV), aby nie stracić zmian.");return false}}};
 const FIELDS=[["number","Numer PL"],["created_at","Data utworzenia","date"],["sent_at","Data wysyłki","date"],["planned_delivery","Planowana dostawa","date"],["status","Status","sel",["roboczy","zatwierdzony","wysłany","anulowany"]],["delivery_type","Dostawa","sel",["kompletna","częściowa"]],["language","Język dokumentu","sel",["PL","EN","PL/EN"]],["sender","Nadawca"],["recipient","Odbiorca"],["delivery_place","Miejsce dostawy"],["recipient_address","Odbiorca – ulica i nr"],["recipient_zip","Odbiorca – kod pocztowy"],["recipient_city","Odbiorca – miasto"],["recipient_country","Odbiorca – kraj (kod, np. PL)"],["recipient_contact","Odbiorca – osoba kontaktowa"],["recipient_phone","Odbiorca – telefon"],["carrier","Przewoźnik"],["src_ref","Dokument źródłowy"]];
 const COLS=[["Produkt","Produkt","text"],["SKU","SKU","text"],["EAN_P","EAN produktu","text"],["EAN_D","EAN display","text"],["EAN_MC","EAN master case","text"],["LOT","LOT","text"],["Sztuki","Sztuki","number"],["Jedn","J.m.","text"],["Kartony","Kartony","number"],["Masa","Masa kg","number"]];
 const LVL=["Produkt","Display","Master Case"];
@@ -286,7 +289,7 @@ $("sum").innerHTML=[["Palety",s.pallets],["Kartony",s.cartons],["Sztuki",s.piece
 $("warns").innerHTML=bad.map(b=>`<div class="warn">⚠ ${esc(b)}</div>`).join("")+softWarn().map(b=>`<div class="warn soft">ℹ ${esc(b)}</div>`).join("");
 document.querySelectorAll("#bSave,.needok").forEach(b=>b.disabled=!!bad.length)}
 // ---- archiwum, druk, transport
-function saveArch(){let a=LS.get(ARK,[]).filter(x=>x.number!==doc.number);a.push({...JSON.parse(JSON.stringify(doc)),saved_at:new Date().toISOString()});if(LS.set(ARK,a))$("msg").textContent="Zapisano w archiwum: "+doc.number}
+function saveArch(){let a=LS.get(ARK,[]).filter(x=>x.number!==doc.number);a.push({...JSON.parse(JSON.stringify(doc)),saved_at:new Date().toISOString()});if(LS.set(ARK,a)){$("msg").textContent="Zapisano w archiwum: "+doc.number+(syncOn()?" (wysyłam do chmury…)":"");archQueue(doc.number)}}
 const CLT={local:"🖥 tylko lokalnie",localnew:"⬆ lokalny nowszy",cloudnew:"⬇ chmura nowsza",sync:"✓ zsynchronizowany","":"—"};
 const q1=n=>encodeURIComponent(n).replace(/'/g,"%27");
 function clState(x){if(!CL)return"";const r=CL.map.get(x.number);if(!r)return"local";const a=ts(x.saved_at);return a>r.ts?"localnew":r.ts>a?"cloudnew":"sync"}
@@ -322,7 +325,22 @@ drop policy if exists "pl_arch_delete" on public.packing_list_archive;
 create policy "pl_arch_select" on public.packing_list_archive for select to anon using (true);
 create policy "pl_arch_insert" on public.packing_list_archive for insert to anon with check (true);
 create policy "pl_arch_update" on public.packing_list_archive for update to anon using (true) with check (true);
-create policy "pl_arch_delete" on public.packing_list_archive for delete to anon using (true);`;
+create policy "pl_arch_delete" on public.packing_list_archive for delete to anon using (true);
+
+create table if not exists public.packing_list_state (
+  key text primary key,
+  data jsonb not null,
+  rev integer not null default 1,
+  saved_at timestamptz not null default now(),
+  device text
+);
+alter table public.packing_list_state enable row level security;
+drop policy if exists "pl_state_select" on public.packing_list_state;
+drop policy if exists "pl_state_insert" on public.packing_list_state;
+drop policy if exists "pl_state_update" on public.packing_list_state;
+create policy "pl_state_select" on public.packing_list_state for select to anon using (true);
+create policy "pl_state_insert" on public.packing_list_state for insert to anon with check (true);
+create policy "pl_state_update" on public.packing_list_state for update to anon using (true) with check (true);`;
 function archMerge(list){const a=LS.get(ARK,[]);let add=0,upd=0,skip=0;
   list.forEach(x=>{if(!x||typeof x!=="object"||!x.number||!Array.isArray(x.items)){skip++;return}
     if(!Array.isArray(x.pallets))x.pallets=[];
@@ -338,9 +356,9 @@ async function archImport(f){if(!f)return;
     const r=archMerge(arr);if(!r)return;renderArch();
     $("msg").textContent="Import archiwum: dodano "+r.add+", zaktualizowano "+r.upd+", pominięto "+r.skip+"."}
   catch(e){alert("Nie udało się wczytać archiwum: "+e.message)}}
-function sbCfg(){const c=LS.get(SB_KEY,{});return{url:String(c.url||"").trim().replace(/\/+$/,""),key:String(c.key||"").trim(),table:String(c.table||"").trim()||"packing_list_archive"}}
-function sbSaveCfg(){LS.set(SB_KEY,{url:$("sbUrl").value,key:$("sbKey").value,table:$("sbTable").value})}
-function sbLoadCfg(){const c=sbCfg();$("sbUrl").value=c.url;$("sbKey").value=c.key;$("sbTable").value=c.table==="packing_list_archive"?"":c.table}
+function sbCfg(){const c=LS.get(SB_KEY,{});return{url:String(c.url||"").trim().replace(/\/+$/,""),key:String(c.key||"").trim(),table:String(c.table||"").trim()||"packing_list_archive",auto:c.auto!==false}}
+function sbSaveCfg(){LS.set(SB_KEY,{url:$("sbUrl").value,key:$("sbKey").value,table:$("sbTable").value,auto:$("sbAuto").checked});syncBadge();scheduleSync()}
+function sbLoadCfg(){const c=sbCfg();$("sbUrl").value=c.url;$("sbKey").value=c.key;$("sbTable").value=c.table==="packing_list_archive"?"":c.table;$("sbAuto").checked=c.auto}
 function sbMsg(t,bad){["sbMsg","archMsg"].forEach(id=>{const e=$(id);if(e){e.textContent=t;e.style.color=bad?"var(--red)":""}})}
 function sbReady(){sbSaveCfg();const c=sbCfg();if(!/^https:\/\/.+/.test(c.url)||!c.key){alert("Uzupełnij adres projektu Supabase (https://…) i klucz anon.");return null}return c}
 async function sbReq(c,method,qs,body,extra){
@@ -385,7 +403,66 @@ async function sbDelOne(n){const c=sbReady();if(!c)return;if(!confirm("Usunąć 
     if(Array.isArray(r)&&!r.length)sbMsg("⚠ Nic nie usunięto – brak polityki DELETE w Supabase. Kliknij „Kopiuj SQL tabeli” i uruchom go ponownie w SQL Editorze.",true);
     else{sbMsg("✓ Usunięto z chmury: "+n);await sbStatus(true)}}
   catch(e){sbMsg("⚠ "+e.message,true)}}
-async function sbShowSql(){try{await navigator.clipboard.writeText(SB_SQL);sbMsg("✓ SQL skopiowany – wklej w Supabase → SQL Editor i uruchom (raz).")}catch(e){prompt("Skopiuj SQL i uruchom w Supabase → SQL Editor:",SB_SQL)}}
+
+// ---- automatyczna synchronizacja: archiwum (kolejka), bieżący dokument i słownik (wersjonowanie rev, wykrywanie konfliktów)
+const SM_KEY="pl_sync_meta_v1",STT="packing_list_state";
+const hhmm=d=>p2(d.getHours())+":"+p2(d.getMinutes());
+const hsh=t=>{let h=5381;for(let i=0;i<t.length;i++)h=((h<<5)+h+t.charCodeAt(i))|0;return h};
+const locData=w=>w==="doc"?doc:DICT;
+function smeta(){const m=LS.get(SM_KEY,{});m.doc=m.doc||{rev:null,dirty:false,h:null};m.dict=m.dict||{rev:null,dirty:false,h:null};m.pending=m.pending||[];return m}
+function ssave(m){LS.set(SM_KEY,m)}
+function hasContent(w){return w==="doc"?(doc.items.length>0||String(doc.recipient||"").trim()!==""):DICT.length>0}
+function devId(){let d=LS.get("pl_device_v1",null);if(!d){d=Math.random().toString(36).slice(2,8);LS.set("pl_device_v1",d)}return d}
+function syncOn(){const c=sbCfg();return c.auto&&/^https:\/\/.+/.test(c.url)&&!!c.key}
+function syncBadge(){const e=$("stor");if(!e||LS.bad)return;const c=sbCfg(),cfg=/^https:\/\/.+/.test(c.url)&&!!c.key;let t=STOR_OK,bg="";
+  if(cfg&&!c.auto)t="Zapis: lokalny (chmura ręcznie)";
+  else if(cfg){if(SYNC.st==="busy")t="Zapis: lokalny + chmura ⏳";else if(SYNC.st==="err"){t="⚠ Chmura: nie zsynchronizowano (dane są lokalnie)";bg="#b7791f"}else t="Zapis: lokalny + chmura"+(SYNC.at?" ✓ "+hhmm(SYNC.at):"")}
+  e.textContent=t;e.style.background=bg;e.title=SYNC.msg||""}
+function syncDirty(w){if(SYNC.applying)return;const m=smeta(),mm=m[w];mm.dirty=hsh(JSON.stringify(locData(w)))!==mm.h;ssave(m);if(mm.dirty)scheduleSync()}
+function scheduleSync(){if(!syncOn())return;clearTimeout(SYNC.timer);SYNC.timer=setTimeout(()=>syncRun(),2500)}
+function archQueue(n){const m=smeta();if(!m.pending.includes(n))m.pending.push(n);ssave(m);if(syncOn()){if(SYNC.busy)SYNC.again=true;else syncRun()}}
+async function ssGet(c,w){const r=await sbReq({...c,table:STT},"GET","?key=eq."+w+"&select=data,rev,saved_at,device");return r&&r[0]||null}
+async function ssPut(c,w,data,rev){const t={...c,table:STT};
+  if(rev==null){try{await sbReq(t,"POST","",[{key:w,data,rev:1,device:devId()}],{Prefer:"return=minimal"});return 1}catch(e){if(/HTTP 409|duplicate|23505/i.test(e.message))return null;throw e}}
+  const r=await sbReq(t,"PATCH","?key=eq."+w+"&rev=eq."+rev,{data,rev:rev+1,saved_at:new Date().toISOString(),device:devId()},{Prefer:"return=representation"});
+  return Array.isArray(r)&&r.length?rev+1:null}
+function applyRemote(w,r){SYNC.applying=true;
+  try{if(w==="doc"){imp=null;doc={...blank(),...r.data};if(!Array.isArray(doc.items))doc.items=[];if(!Array.isArray(doc.pallets))doc.pallets=[];ensureIds();persist();renderAll()}
+    else{DICT=Array.isArray(r.data)?r.data:[];LS.set(DKEY,DICT);renderDict()}}
+  finally{SYNC.applying=false}
+  $("msg").textContent="Wczytano zmiany z chmury: "+(w==="doc"?"dokument roboczy.":"słownik.")}
+function markSynced(m,w,rev){const mm=m[w];mm.rev=rev;mm.dirty=false;mm.h=hsh(JSON.stringify(locData(w)));ssave(m)}
+async function resolveConflict(c,w,r,m){
+  if(w==="dict"){SYNC.applying=true;
+    try{(Array.isArray(r.data)?r.data:[]).forEach(rec=>{if(rec&&!dictFind({name:rec.Produkt,sku:rec.SKU,eans:EANF.map(([k])=>rec[k])}))DICT.push(rec)});LS.set(DKEY,DICT)}finally{SYNC.applying=false}
+    renderDict();const nr=await ssPut(c,"dict",DICT,r.rev);if(nr==null)return"retry";markSynced(m,"dict",nr);$("msg").textContent="Słownik scalono z wersją z innego urządzenia.";return"ok"}
+  const keepCloud=confirm("Dokument roboczy zmieniono na innym urządzeniu, a lokalne zmiany nie były jeszcze zsynchronizowane.\n\nOK – wczytaj wersję z chmury (lokalną zapiszę w archiwum jako kopię)\nAnuluj – zachowaj lokalną i nadpisz nią chmurę");
+  if(keepCloud){if(hasContent("doc")){const a=LS.get(ARK,[]);a.push({...JSON.parse(JSON.stringify(doc)),number:doc.number+" (kopia lokalna "+hhmm(new Date())+")",saved_at:new Date().toISOString()});LS.set(ARK,a)}
+    applyRemote("doc",r);markSynced(m,"doc",r.rev);return"ok"}
+  const nr=await ssPut(c,"doc",doc,r.rev);if(nr==null)return"retry";markSynced(m,"doc",nr);return"ok"}
+async function syncOne(c,w,rr){const m=smeta(),mm=m[w],has=hasContent(w);
+  if(!rr){if(has){const nr=await ssPut(c,w,locData(w),null);if(nr==null)return"retry";markSynced(m,w,nr)}return"ok"}
+  if(mm.rev!=null&&rr.rev===mm.rev){if(mm.dirty){const nr=await ssPut(c,w,locData(w),mm.rev);if(nr==null)return"retry";markSynced(m,w,nr)}return"ok"}
+  const r=await ssGet(c,w);if(!r)return"retry";
+  if(!has||(!mm.dirty&&mm.rev!=null)){applyRemote(w,r);markSynced(m,w,r.rev);return"pulled"}
+  return resolveConflict(c,w,r,m)}
+async function syncPending(c){const list=smeta().pending.slice();if(!list.length)return;const a=LS.get(ARK,[]),done=new Set();
+  try{for(const n of list){const x=a.find(y=>y.number===n);if(x)await sbReq(c,"POST","?on_conflict=number",[{number:x.number,data:x,saved_at:x.saved_at||new Date().toISOString()}],{Prefer:"resolution=merge-duplicates,return=minimal"});done.add(n)}}
+  finally{const m=smeta();m.pending=m.pending.filter(n=>!done.has(n));ssave(m)}
+  if(CL)await sbStatus(true)}
+async function syncRun(retried){if(!syncOn()||SYNC.busy)return;const c=sbCfg();SYNC.busy=true;SYNC.st="busy";syncBadge();let retry=false;
+  try{await syncPending(c);
+    const rows=await sbReq({...c,table:STT},"GET","?select=key,rev,device")||[],by=Object.fromEntries(rows.map(r=>[r.key,r]));
+    for(const w of["doc","dict"]){if(await syncOne(c,w,by[w])==="retry")retry=true}
+    SYNC.st="ok";SYNC.at=new Date();SYNC.msg=""}
+  catch(e){SYNC.st="err";SYNC.msg=e.message+(/404|42P01|relation/i.test(e.message)?" – uruchom ponownie SQL (przycisk „Kopiuj SQL tabeli”)":"")}
+  SYNC.busy=false;syncBadge();
+  if(retry&&!retried)setTimeout(()=>syncRun(true),500);else if(SYNC.again){SYNC.again=false;setTimeout(()=>syncRun(),300)}}
+setTimeout(()=>{syncBadge();if(syncOn())syncRun()},900);
+document.addEventListener("visibilitychange",()=>{if(!document.hidden)syncRun()});
+window.addEventListener("focus",()=>syncRun());
+setInterval(()=>{if(!document.hidden)syncRun()},60000);
+async function sbShowSql(){try{await navigator.clipboard.writeText(SB_SQL);sbMsg("✓ SQL skopiowany (tabele: archiwum i stan aplikacji) – wklej w Supabase → SQL Editor i uruchom. Bezpieczne do ponownego uruchomienia.")}catch(e){prompt("Skopiuj SQL i uruchom w Supabase → SQL Editor:",SB_SQL)}}
 function delArch(i){if(!confirm("Usunąć dokument z archiwum?"))return;const a=LS.get(ARK,[]);a.splice(i,1);LS.set(ARK,a);renderArch()}
 // ---- zlecenie transportowe myRaben (import XLSX). WSZYSTKIE kolumny są w MR_COLS – po otrzymaniu wzorca z Rabena wystarczy zmienić tę listę (nagłówek + skąd brać wartość).
 const MR_COLS=[
