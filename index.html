@@ -29,6 +29,7 @@ label.file input{display:none}
 label.file{text-transform:none;font-size:inherit;letter-spacing:0;margin:0}
 input,select{width:100%;margin:5px 0 8px;padding:10px;background:var(--inp);color:var(--ink);border:1px solid var(--line);border-radius:7px;font:inherit;font-weight:400;letter-spacing:0;text-transform:none}
 input:focus,select:focus{outline:2px solid #123b6933;border-color:var(--navy)}
+textarea{width:100%;margin:5px 0 8px;padding:10px;background:var(--inp);color:var(--ink);border:1px solid var(--line);border-radius:7px;font:inherit;font-weight:400;letter-spacing:0;text-transform:none;resize:vertical}
 .tw{overflow-x:auto}
 table{width:100%;border-collapse:collapse;margin-top:14px;font-size:.82rem;border:1px solid var(--line)}
 td,th{border:1px solid var(--line);padding:6px;text-align:left}
@@ -59,6 +60,7 @@ td button{padding:5px 9px;font-size:.75rem}
 <p class="hint">Każdą paletę możesz wypełnić dowolnymi pozycjami (paleta mieszana) i rozłożyć jedną pozycję na kilka palet. Auto-rozkład tworzy tylko szkic: jedna pozycja na paletę.</p></div>
 <div class="panel"><h3>Przypisanie kartonów</h3><div class="tw" id="allocBox"></div></div>
 <div id="palBox"></div></section>
+<section id="s_claim"><div class="panel"><h3>Protokół reklamacyjny</h3><div id="claimBox"></div></div></section>
 <section id="s_dict"><div class="panel"><h3>Słownik produktów</h3>
 <div class="row"><input id="dq" placeholder="🔎 Szukaj (nazwa, SKU, EAN, LOT)…" style="max-width:320px" oninput="DQ=this.value;renderDict()"><button onclick="addDict()">➕ Dodaj produkt</button><button onclick="dictExport()">⬇ Eksport (JSON)</button><label class="file" style="margin:0">⬆ Import (JSON)<input type="file" accept="application/json,.json" onchange="dictImport(this.files[0]);this.value=''"></label></div>
 <p class="hint">Dane ze słownika uzupełniają pozycje przy imporcie z PDF oraz po kliknięciu 📖 w zakładce Pozycje. Dopasowanie: najpierw po EAN (dowolny z trzech), potem po SKU, na końcu po nazwie. Uzupełniane są tylko puste pola — to, co wpisano ręcznie, zostaje.</p>
@@ -163,7 +165,7 @@ function odsBlob(sheets){const ws=new Set();sheets.forEach(s=>s.widths.forEach(w
 function saveBlob(blob,name){const a=document.createElement('a'),u=URL.createObjectURL(blob);a.href=u;a.download=name;document.body.appendChild(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(u),4000)}
 </script>
 <script>
-const APP_VERSION="2.0.0",KEY="pl_doc_v1",ARK="pl_archive_v1",SB_KEY="pl_sb_cfg_v1";
+const APP_VERSION="2.1.0",KEY="pl_doc_v1",ARK="pl_archive_v1",SB_KEY="pl_sb_cfg_v1";
 const r2=v=>Math.round(v*100)/100;
 // Typy palet: domyślne wymiary [cm] i tara [kg] – orientacyjne, można nadpisać na każdej palecie
 const PT={"EUR":{l:120,w:80,t:25},"Półpaleta":{l:80,w:60,t:12},"Przemysłowa":{l:120,w:100,t:30},"Inna":{l:"",w:"",t:""}};
@@ -193,8 +195,8 @@ function newDoc(ask){if(ask&&!confirm("Zacząć nowy dokument? Niezapisane zmian
 function persist(){LS.set(KEY,doc)}
 const num=s=>{const v=parseFloat(String(s).replace(/\s/g,"").replace(",","."));return isNaN(v)?0:v};
 // ---- zakładki
-const TABS=[["doc","Dokument"],["items","Pozycje"],["pal","Palety"],["dict","Słownik"],["arch","Archiwum"]];
-function tab(id){TABS.forEach(t=>{$("s_"+t[0]).classList.toggle("show",t[0]===id);$("tb_"+t[0]).classList.toggle("active",t[0]===id)});if(id==="arch")renderArch();if(id==="dict")renderDict()}
+const TABS=[["doc","Dokument"],["items","Pozycje"],["pal","Palety"],["claim","Reklamacja"],["dict","Słownik"],["arch","Archiwum"]];
+function tab(id){TABS.forEach(t=>{$("s_"+t[0]).classList.toggle("show",t[0]===id);$("tb_"+t[0]).classList.toggle("active",t[0]===id)});if(id==="arch")renderArch();if(id==="dict")renderDict();if(id==="claim")renderClaim()}
 $("tabs").innerHTML=TABS.map(t=>`<button id="tb_${t[0]}" onclick="tab('${t[0]}')">${t[1]}</button>`).join("");
 $("ver").textContent="v"+APP_VERSION;sbLoadCfg();
 // ---- nagłówek
@@ -521,8 +523,8 @@ async function toTransport(){if(validate().length)return;
 const colL=i=>String.fromCharCode(65+i);
 const S=(v,st)=>({t:'s',v:v,st}),Nn=(v,f,st)=>({t:'n',v:+v||0,f,st}),Pp=(v,f,st)=>({t:'p',v:+v||0,f,st}),Dd=v=>({t:'d',v});
 const slugNo=()=>String(doc.number).replace(/[^A-Za-z0-9_-]+/g,'_').replace(/^_+|_+$/g,'')||'dokument';
-function buildPackingPdf(){
-  const title='Packing List '+doc.number,opt={sub:''},c={footer:'Packing List '+doc.number+(doc.recipient?'  ·  '+doc.recipient:'')},pages=[],s=summary();
+function buildPackingPdf(claim){
+  const kind=claim?'Protokół reklamacyjny ':'Packing List ',title=kind+doc.number,opt={sub:''},c={footer:kind+doc.number+(doc.recipient?'  ·  '+doc.recipient:'')},pages=[],s=summary();
   let cmds=[],Y=0;
   const f2=v=>(+v).toFixed(2),pct=(w,p)=>(p+w)?(w/(p+w)*100).toFixed(1):'0.0';
   const rect=(x,y,w,h,col)=>cmds.push(col+' rg '+f2(x)+' '+f2(PH-y-h)+' '+f2(w)+' '+f2(h)+' re f');
@@ -543,6 +545,36 @@ function buildPackingPdf(){
       let x=PM;cells.forEach((z,i)=>{z.lines.forEach((l,k)=>text(x+ax(i,cols[i].a),Y+10+k*lh,l,fs,z.b,z.c||PDFC.ink,cols[i].a));x+=ws[i]});
       hline(PM,PW-PM,Y+h,PDFC.line,0.4);Y+=h});
     Y+=10};
+  const frame=(x,y,w,h,label)=>{cmds.push(PDFC.line+' RG 0.8 w '+f2(x)+' '+f2(PH-y-h)+' '+f2(w)+' '+f2(h)+' re S');text(x+8,y+14,label,7,true,PDFC.grey)};
+  const claimBody=()=>{const C=doc.claim||{},ci=C.items||{},cp=C.pals||[],dash=v=>String(v||'').trim()||'—';
+    rect(0,0,PW,80,PDFC.navy);
+    text(PM,26,fit((doc.sender||'').toUpperCase(),8,true,CW-80),8,true,PDFC.soft);
+    text(PW-PM,26,'v'+APP_VERSION,8,true,PDFC.soft,'r');
+    text(PM,54,'PROTOKÓŁ REKLAMACYJNY',19,true,PDFC.white);
+    text(PM,71,fit('Dot. Packing List '+doc.number+(doc.waybill?'  ·  list przewozowy '+doc.waybill:''),8.5,false,CW),8.5,false,PDFC.soft);
+    Y=94;
+    heading('Dane przesyłki');
+    table([{h:'Pole',w:140},{h:'Wartość',w:'*'}],[['Nadawca',dash(doc.sender)],['Odbiorca',dash(doc.recipient)],['Miejsce dostawy',dash([doc.delivery_place,doc.recipient_address,[doc.recipient_zip,doc.recipient_city].filter(Boolean).join(' ')].filter(Boolean).join(', '))],['Przewoźnik',dash(doc.carrier)],['Nr listu przewozowego',dash(doc.waybill)],['Data wysyłki',fdate(doc.sent_at)||'—'],['Planowana dostawa',fdate(doc.planned_delivery)||'—'],['Dokument źródłowy',dash(doc.src_ref)],['Palety / kartony / masa brutto',s.pallets+' / '+s.cartons+' / '+s.gross+' kg']]);
+    heading('Dane zdarzenia');
+    table([{h:'Pole',w:140},{h:'Wartość',w:'*'}],[['Rodzaj reklamacji',dash(C.type)],['Data stwierdzenia',C.date?fdate(C.date):'—'],['Miejsce stwierdzenia',dash(C.place)],['Pojazd / kierowca',dash(C.vehicle)],['Adnotacja na liście przewozowym',dash(C.cmr)],['Zgłaszający',dash(C.reporter)],['Żądanie',dash(C.demand)]]);
+    heading('Opis szkody / braku');
+    const paras=String(C.desc||'').split(/\n+/).map(t=>t.trim()).filter(Boolean);
+    if(paras.length)table([{h:'Opis',w:'*'}],paras.map(t=>[t]));
+    else{ensure(100);for(let i=0;i<4;i++){Y+=20;hline(PM,PW-PM,Y,PDFC.line,0.6)}Y+=12}
+    heading('Pozycje objęte reklamacją');
+    const claimed=doc.items.filter(x=>num(ci[x.id])>0);
+    if(claimed.length)table([{h:'Lp',w:22,a:'c'},{h:'Produkt',w:'*'},{h:'SKU',w:70},{h:'LOT',w:60},{h:'Wysłano szt.',w:56,a:'r'},{h:'Reklamowane szt.',w:80,a:'r'}],
+      claimed.map(x=>[String(doc.items.indexOf(x)+1),x.Produkt||'',x.SKU||'—',x.LOT||'',String(num(x.Sztuki)),{t:String(num(ci[x.id])),b:true,c:PDFC.red}]));
+    else{sub('NIE WSKAZANO ILOŚCI – UZUPEŁNIJ RĘCZNIE');table([{h:'Lp',w:22,a:'c'},{h:'Produkt',w:'*'},{h:'SKU',w:70},{h:'LOT',w:60},{h:'Wysłano szt.',w:56,a:'r'},{h:'Reklamowane szt.',w:80,a:'r'}],
+      doc.items.map((x,i)=>[String(i+1),x.Produkt||'',x.SKU||'—',x.LOT||'',String(num(x.Sztuki)),'']))}
+    if(doc.pallets.length){heading('Palety');
+      table([{h:'Paleta',w:50},{h:'Typ',w:90},{h:'Wymiary [cm]',w:'*'},{h:'Masa brutto [kg]',w:80,a:'r'},{h:'Objęta reklamacją',w:90,a:'c'}],
+        doc.pallets.map((p,i)=>[(i+1)+' / '+doc.pallets.length,p.type||'—',(p.len||p.wid||p.hgt)?(p.len||'—')+' × '+(p.wid||'—')+' × '+(p.hgt||'—'):'—',String(palGross(p)),cp.includes(i)?{t:'TAK',b:true,c:PDFC.red}:'—']))}
+    const fw=(CW-10)/2,fh=130;ensure(fh+50);heading('Zdjęcia');for(let r=0;r<2;r++){ensure(fh+10);frame(PM,Y,fw,fh,'Zdjęcie '+(r*2+1));frame(PM+fw+10,Y,fw,fh,'Zdjęcie '+(r*2+2));Y+=fh+10}
+    ensure(70);Y+=26;
+    hline(PM,PM+200,Y,PDFC.ink,0.6);hline(PW-PM-200,PW-PM,Y,PDFC.ink,0.6);
+    text(PM,Y+11,'Zgłaszający (data, podpis)',7.5,false,PDFC.grey);text(PW-PM-200,Y+11,'Kierowca / przewoźnik (data, podpis)',7.5,false,PDFC.grey);Y+=20};
+  if(claim)claimBody();else{
   rect(0,0,PW,80,PDFC.navy);
   text(PM,26,fit((doc.sender||'Packing List').toUpperCase(),8,true,CW-80),8,true,PDFC.soft);
   text(PW-PM,26,'v'+APP_VERSION,8,true,PDFC.soft,'r');
@@ -565,10 +597,12 @@ function buildPackingPdf(){
   ensure(70);Y+=26;
   hline(PM,PM+200,Y,PDFC.ink,0.6);hline(PW-PM-200,PW-PM,Y,PDFC.ink,0.6);
   text(PM,Y+11,'Wydał (data, podpis)',7.5,false,PDFC.grey);text(PW-PM-200,Y+11,'Odebrał (data, podpis)',7.5,false,PDFC.grey);Y+=20;
+  }
  pages.push(cmds);const n=pages.length,foot=fit(c.footer||'',7,false,CW-140);
   pages.forEach((p,i)=>{cmds=p;hline(PM,PW-PM,PH-36,PDFC.line,0.6);text(PM,PH-24,foot,7,false,PDFC.grey);text(PW-PM,PH-24,'v'+APP_VERSION+'  ·  Strona '+(i+1)+' / '+n,7,false,PDFC.grey,'r')});
   return pages.map(p=>p.join('\n'));
 }
+function exportClaimPdf(){try{saveBlob(pdfAssemble(buildPackingPdf(true),'Protokół reklamacyjny '+doc.number),'reklamacja_'+slugNo()+'.pdf');$('msg').textContent='Wygenerowano protokół reklamacyjny (PDF).'}catch(e){alert('Nie udało się wygenerować protokołu: '+e.message)}}
 function exportPdf(){if(validate().length)return;try{saveBlob(pdfAssemble(buildPackingPdf(),'Packing List '+doc.number),'packing_list_'+slugNo()+'.pdf');$('msg').textContent='Wygenerowano raport PDF.'}catch(e){alert('Nie udało się wygenerować PDF: '+e.message)}}
 function buildSheets(){const H=a=>a.map(h=>S(h,'h')),n=doc.items.length,s=summary(),sh=[];
   sh.push({name:'Dokument',widths:[26,44],rows:[H(['Pole','Wartość']),...FIELDS.filter(f=>f[0]!=='number'||1).map(f=>[S(f[1]),S(String(doc[f[0]]||''))]),[S('Palety'),Nn(s.pallets)],[S('Kartony'),Nn(s.cartons)],[S('Sztuki'),Nn(s.pieces)],[S('Masa netto [kg]'),Nn(s.weight)],[S('Tara palet [kg]'),Nn(s.tare)],[S('Masa brutto [kg]'),Nn(s.gross)],[S('Objętość [m³]'),Nn(s.volume)]]});
@@ -711,6 +745,22 @@ function labelPdf(one){if(!doc.pallets.length){$("msg").textContent="Najpierw do
     saveBlob(pdfAssemble(buildLabelsPdf(idx),"Etykiety palet "+doc.number),name);$("msg").textContent="Wygenerowano "+(all?"etykiety palet ("+idx.length+" str. A4)":"etykietę palety "+(one+1))+": "+name}
   catch(e){alert("Nie udało się wygenerować etykiet: "+e.message)}}
 
-function renderAll(){renderHdr();renderSrc();renderItems();renderPallets();refresh()}
+// ---- reklamacja (protokół PDF): dane zapisują się w dokumencie (doc.claim), więc idą też do archiwum i chmury
+const CLAIM_TYPES=["uszkodzenie towaru","brak towaru / niedobór","niezgodność z dokumentem","uszkodzenie opakowania / palety","opóźnienie dostawy","inne"],CLAIM_DEMANDS=["odszkodowanie","wymiana towaru","uzupełnienie braków","korekta / nota","do ustalenia"];
+function setClaim(k,v){doc.claim={...(doc.claim||{}),[k]:v};persist()}
+function setClaimItem(id,v){const it={...((doc.claim||{}).items||{})};if(String(v).trim()==="")delete it[id];else it[id]=num(v);setClaim("items",it)}
+function setClaimPal(i,on){const a=new Set((doc.claim||{}).pals||[]);on?a.add(i):a.delete(i);setClaim("pals",[...a].sort((x,y)=>x-y))}
+function clearClaim(){if(!confirm("Wyczyścić wszystkie dane reklamacji w tym dokumencie?"))return;delete doc.claim;persist();renderClaim()}
+function renderClaim(){const box=$("claimBox");if(!box)return;const C=doc.claim||{},ci=C.items||{},cp=C.pals||[];
+  const sel=(k,o,d)=>`<label>${d}<select onchange="setClaim('${k}',this.value)"><option value="">—</option>${o.map(x=>`<option ${x===C[k]?"selected":""}>${x}</option>`).join("")}</select></label>`;
+  const inp=(k,d,t)=>`<label>${d}<input ${t?`type="${t}"`:""} value="${esc(C[k]||"")}" onchange="setClaim('${k}',this.value)"></label>`;
+  box.innerHTML=`<p class="hint">Dane dotyczą bieżącego dokumentu (${esc(doc.number)}). Dokument z archiwum otwórz przyciskiem „Kopia”. Protokół zawiera dane przesyłki z dokumentu, opis szkody, pozycje i palety objęte reklamacją, ramki na zdjęcia oraz pola na podpisy.</p>
+<div class="grid">${sel("type",CLAIM_TYPES,"Rodzaj reklamacji")}${inp("date","Data stwierdzenia","date")}${inp("place","Miejsce stwierdzenia")}${inp("vehicle","Pojazd / kierowca")}${sel("cmr",["wpisano na liście przewozowym","nie wpisano"],"Adnotacja o szkodzie na liście przewozowym")}${inp("reporter","Zgłaszający (imię i nazwisko / firma)")}${sel("demand",CLAIM_DEMANDS,"Żądanie")}</div>
+<label>Opis szkody / braku<textarea rows="5" onchange="setClaim('desc',this.value)">${esc(C.desc||"")}</textarea></label>
+<h4 style="margin:14px 0 4px">Pozycje objęte reklamacją</h4>
+${doc.items.length?`<div class="tw"><table><tr><th>#</th><th>Produkt</th><th>LOT</th><th>Wysłano szt.</th><th style="width:170px">Reklamowane szt.</th></tr>${doc.items.map((x,i)=>`<tr><td>${i+1}</td><td>${esc(x.Produkt)}</td><td>${esc(x.LOT)}</td><td>${num(x.Sztuki)}</td><td><input type="number" min="0" step="any" style="margin:0" value="${esc(ci[x.id]??"")}" onchange="setClaimItem('${x.id}',this.value)"></td></tr>`).join("")}</table></div><p class="hint">Jeśli nie wpiszesz ilości, w protokole pojawi się lista wszystkich pozycji z pustą kolumną do uzupełnienia ręcznie.</p>`:`<p class="hint">Dokument nie ma pozycji.</p>`}
+${doc.pallets.length?`<h4 style="margin:14px 0 4px">Palety objęte reklamacją</h4><div class="row">${doc.pallets.map((p,i)=>`<label style="display:flex;align-items:center;gap:6px;text-transform:none;letter-spacing:0;font-size:.9rem"><input type="checkbox" style="width:auto;margin:0" ${cp.includes(i)?"checked":""} onchange="setClaimPal(${i},this.checked)">Paleta ${i+1}</label>`).join("")}</div>`:""}
+<div class="row" style="margin-top:14px"><button class="ok" onclick="exportClaimPdf()">📄 Pobierz protokół reklamacyjny (PDF)</button><button class="danger" onclick="clearClaim()">🧹 Wyczyść dane reklamacji</button></div>`}
+function renderAll(){renderHdr();renderSrc();renderItems();renderPallets();renderClaim();refresh()}
 doc=LS.get(KEY,null)||blank();["items","pallets"].forEach(k=>{if(!Array.isArray(doc[k]))doc[k]=[]});ensureIds();renderAll();tab("doc");
 </script></body></html>
